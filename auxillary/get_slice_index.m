@@ -13,6 +13,20 @@ function slice = get_slice_index(slices,levels,index,level)
         level = 2;
     end
     indeces = find(slices == index);
+    % adjust for missing slices
+    while isempty(indeces)
+        if index > (120 - index)
+            index = index - 1;
+        else
+            index = index + 1;
+        end 
+        indeces = find(slices == index); 
+        if length(indeces) == 1
+            if levels(indeces) ~= level
+                 indeces = [];
+            end
+        end
+    end
 
     if isempty(indeces)
         warning('Requested slice index not found!')
