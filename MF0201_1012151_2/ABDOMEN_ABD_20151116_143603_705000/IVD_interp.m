@@ -1,7 +1,7 @@
 % Authors:     Ryan Hayden & Jason E. Hill, Ph.D.,
 % Institution: Texas Tech University
 %              Dept. of Computer and Electrical Engineerin
-% Updated:     19 APR 2017
+% Updated:     1 MAR 2017
 
 clearvars, close all;
 currDir = pwd;
@@ -13,8 +13,9 @@ cd(currDir)
 %% load volumes
 load subject01_f_registered.mat
 resultsFile = 'subject01_f_IVDinterp.mat';
-writeResults = false;
-showSlice = 1;
+writeResults = true;
+showProgress = false;
+showSlice = 53;
 
 niiWup_reslice = load_nii(NIFTI_file_name_W_upper_reslice);
 niiWlo_reslice = load_nii(NIFTI_file_name_W_lower_reslice);
@@ -28,7 +29,6 @@ DH = 260; % Slice height
 %% Extract water image data; inhomogeneity correct; auto-threshold 
 h = waitbar(0,'Please wait, enhancing water image data...');
 WaterImages = uint8(zeros(DH,DW,Nslices));
-BinaryWaterImages = logical(WaterImages);
 for i = indeces
    slice = slices(i);   
    level = levels(i); 
@@ -58,7 +58,7 @@ for i = indeces
    % construct rough estimate of the signal inhomogeneity via morphological closing
    [IWshow2,~] = CorrectInhomogeneity(IWraw,50,[],1.0); %50 %100);
 
-if i == showSlice   
+if showProgress && i == showSlice    
 figure,
 imshow(IWshow2)   
 end
@@ -71,18 +71,18 @@ end
    IWshow3 = IWshow3.*uint8(1-IWrawVeto);
 
 
-if i == showSlice   
+if showProgress && i == showSlice   
 figure,
 imshow(IWshow3)   
 end
    
    % Find the peak and valley pixel bins of histogram
-if i == showSlice  
-   [peakPixelBinW,valleyPixelBinW] = FindHistogramExtrema(IWshow3,backgroundThreshold,foregroundThresholdW+42,true);
+if showProgress && i == showSlice  
+   [peakPixelBinW,valleyPixelBinW] = FindHistogramExtrema(IWshow3,backgroundThreshold,foregroundThresholdW+43,true);
    peakPixelBinW = peakPixelBinW + 2*backgroundThreshold %#ok<NOPTS>
    peakIndicesW = find(IWshow3 == peakPixelBinW,1) %#ok<NOPTS>
 else
-   [peakPixelBinW,valleyPixelBinW] = FindHistogramExtrema(IWshow3,backgroundThreshold,foregroundThresholdW+45,false);
+   [peakPixelBinW,valleyPixelBinW] = FindHistogramExtrema(IWshow3,backgroundThreshold,foregroundThresholdW+43,false);
 end
    peakPixelBinW = peakPixelBinW + 2*backgroundThreshold;
    if peakPixelBinW > 255
@@ -100,7 +100,7 @@ end
    IWshow2(IWshow2>IWpeak) = IWpeak;
    IWshow2 = IWshow2.*uint8(1-IWrawVeto);
 
-if i == showSlice   
+if showProgress && i == showSlice   
 figure,
 imshow(IWshow2)   
 end  
@@ -113,10 +113,8 @@ end
    % define water foreground as being above histogram valley
    BinaryWaterImage = logical((WaterImage > valleyPixelBinW).*double(1-IWrawVeto));
 
-   WaterImages(:,:,i)       = rot90(WaterImage,2);
-   BinaryWaterImages(:,:,i) = rot90(BinaryWaterImage,2);
-   %WaterImages(:,:,i) = WaterImage;
-   %BinaryWaterImages(:,:,i) = BinaryWaterImage;
+   WaterImages(:,:,i) = rot90(WaterImage,2).*uint8(rot90(BinaryWaterImage,2));
+   
    waitbar(i/Nslices)
    
 end
@@ -125,7 +123,6 @@ close(h)
 % RESULT: a WaterImage volume & a BinaryWaterImage
 
 %% Interpolation Grid
-
 IVD.zs     = [69, 83, 98, 110, 11, 23, 35, 47, 58, 68, 77, 86, 95, 103, 111];
 IVD.levels = [2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
 IVD.labels = [-4, -3, -2, -1, -1, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3];
@@ -134,24 +131,21 @@ IVD.ys     = [136, 137, 135, 130, 130, 127, 123, 119, 117, 115, 112, 111, 109, 1
 
 IVD.N = length(IVD.zs);
 
-% Z_L1_T12  = 22; %X_L1_T12  = 163; Y_L1_T12  = 112;
-
 IVD.zs_interp = zeros(1,IVD.N);
 for k = 1:IVD.N
     
 z = IVD.zs(k);
 
 % apply to slice
-slice = get_slice_index(slices,levels,z,IVD.levels(k)) %#ok<NOPTS>
+slice = get_slice_index(slices,levels,z,IVD.levels(k)); %#ok<NOPTS>
 
 WI = WaterImages(:,:,slice);
-binWI = BinaryWaterImages(:,:,slice);
 
 % initial IVD mask seed
 W = 11; % Width of intervertebral disc mask
-H = 7; % Height of intervertebral disc mask 
+H = 7;  % Height of intervertebral disc mask 
 
-% Middle of intevertabral disc coordinates
+% Middle of intevertebral disc coordinates
 x = IVD.xs(k); 
 y = IVD.ys(k); 
 
@@ -162,15 +156,14 @@ iter = 1;
 while ~stop_flag && (iter < max_iteration)
     [X, Y] = meshgrid(1:DW,1:DH); % Image size 
     EMask = ((X - x)/W).^2 + ((Y - y)/H).^2 <= 1;
-    
-BMask = (EMask.*binWI);
+    BMask = (EMask.*logical(WI>0));
     mask_sum = sum(EMask(:)) - sum(BMask(:));
     if mask_sum < stop_threshold
         % expand mask
         W = W+1;
         H = H+1;
         % update the center of mass
-        IVDmask = WI.*uint8(EMask).*uint8(binWI);
+        IVDmask = WI.*uint8(EMask);
         CoM = center_of_mass(IVDmask);
         X = CoM(1);
         Y = CoM(2);
@@ -180,13 +173,18 @@ BMask = (EMask.*binWI);
     iter = iter+1;
 end
 
-%% Apply to slice
+% clean up mask with morphological operations
+se3 = strel('diamond',1);
+BMask = imopen(BMask,se3);
+% se11 = strel('disk',5);
+BMask = imopen(imfill(BMask),se3);
+BMask = imclose(BMask,se3);
 
-
+%% Apply opened ellipse mask to slice to creat the IVD mask
 figure,
 imshow(WI)
 
-IVDmask = WI.*uint8(EMask).*uint8(binWI);
+IVDmask = WI.*uint8(BMask);
 figure,
 imshow(IVDmask)
 
@@ -196,15 +194,13 @@ while ~stop_flag
    
    if slice > 2 && levels(slice-1) == levels(slice)
        WI_minus_1 = WaterImages(:,:,slice-1);
-       binWI_minus_1 = BinaryWaterImages(:,:,slice-1);
-       IVDmask_minus_1 = WI_minus_1.*uint8(EMask).*uint8(binWI_minus_1);
+       IVDmask_minus_1 = WI_minus_1.*uint8(EMask);
    else
        IVDmask_minus_1 = IVDmask;
    end
    if slice < (Nslices-1) && levels(slice+1) == levels(slice)
        WI_plus_1 = WaterImages(:,:,slice+1);
-       binWI_plus_1 = BinaryWaterImages(:,:,slice+1);
-       IVDmask_plus_1 = WI_plus_1.*uint8(EMask).*uint8(binWI_plus_1);       
+       IVDmask_plus_1 = WI_plus_1.*uint8(EMask);       
    else
        IVDmask_plus_1 = IVDmask;
    end
@@ -230,16 +226,86 @@ disp(['The interpolated z slice position of the IVD is ',num2str(IVD_z_interp),'
 
 IVD.zs_interp(k) = IVD_z_interp; 
 
+IVD.mask(:,:,k) = IVDmask;
+
+if isempty(get_slice_index(slices,levels,round(IVD_z_interp),IVD.levels(k)))
+   IVD.slice(k) = get_slice_index(slices,levels,z,IVD.levels(k));
+else
+   IVD.slice(k) = get_slice_index(slices,levels,round(IVD_z_interp),IVD.levels(k));
+end
+
 end
 
 IVD.zs_interp
+
+% correct scan offset
+IVD.scanOffset = IVD.zs_interp(4)-IVD.zs_interp(5);   %Z_L1_L2 - Z_L1_L2u (98 discrete)
+
+IVD.first_lower_l = 121 - lowerTop + upperBottom + IVD.scanOffset;
 
 %NOTE: add this to a IVD.zs array for all IVDs and 
 % also construct a IVD.labels with this one labeled 12 for T12.
 % The next one down will be labelled -1 for L1 and so forth.
 
 if writeResults       
-    save(resultsFile,'IVD');
+    save(resultsFile,'IVD','WaterImages');
 end
 
+%% create spinal cord mask
+SpineVol = WaterImages;
+SpineVol(WaterImages == 0) = 92;
+k = 1;
+for s = length(indeces):-1:1
+   if s < IVD.slice(k)
+       if k < length(IVD.slice)
+          k = k + 1;
+       end
+   end
+   if k == 1
+       SpineVol(:,:,s) =  (SpineVol(:,:,s)).*uint8((IVD.mask(:,:,1)>0));
+   else
+       SpineVol(:,:,s) =  (SpineVol(:,:,s)).*uint8((IVD.mask(:,:,k-1)>0)|(IVD.mask(:,:,k)>0));
+   end
+       if ~logical(mod(s,10)) && k > 1
+          figure, imshow(squeeze(SpineVol(:,:,s)),[]);
+       end   
+end
+    
+%% visualize the spinal cord
+scanOffset = round(IVD.scanOffset);
 
+first_lower_i = length(upperSlices) + lowerTop - upperBottom - scanOffset;
+
+show_i = [1:length(upperSlices) first_lower_i:Nslices];
+overlap_lower_i = (length(upperSlices)+1):(first_lower_i-1);
+overlap_upper_i = (length(upperSlices)-length(overlap_lower_i)+1):length(upperSlices);
+no_overlap_i = [1:(length(upperSlices)-length(overlap_lower_i)) first_lower_i:Nslices];
+
+Nshow = length(show_i);
+Noverlap = length(overlap_lower_i);
+
+SV = SpineVol;
+SV(length(upperSlices)) = SV(length(upperSlices)+1);
+for i = 1:size(SV,1)
+    for j = 1:size(SV,2)
+        x = 1:size(SV,3);
+        v = double(squeeze(SV(i,j,:)));
+        xq = x + IVD.scanOffset - scanOffset; 
+        vq = interp1(x,v,xq);
+        SV(i,j,length(upperSlices)+1:end) = vq(length(upperSlices)+1:end);
+    end
+end
+for j = 1:Noverlap
+    average_weight = j/(Noverlap+1);
+    SV(:,:,overlap_upper_i(j))   = average_weight*SV(:,:,overlap_lower_i(j)) + (1-average_weight)*SV(:,:,overlap_upper_i(j));
+end
+
+D = flip(SV(:,:,show_i),3);
+Ds = smooth3(D);
+
+figure,
+hc = vol3d('cdata',D,'texture','3D');
+view(3);  
+axis([75 200 50 175 (length(indeces)-IVD.slice(1)-20) inf]);   daspect([1 1 1.40625/3.0])
+colormap(bone(256));
+alphamap('rampup');
